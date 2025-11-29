@@ -1,12 +1,9 @@
-import { Component, EventEmitter, Input, Output, ViewChild } from '@angular/core';
+import { AfterViewInit, ChangeDetectionStrategy, ChangeDetectorRef, Component, computed, effect, EventEmitter, inject, Input, OnChanges, Output, signal, SimpleChanges, ViewChild } from '@angular/core';
 import { MatTable, MatTableDataSource } from '@angular/material/table';
 import { MatPaginator } from '@angular/material/paginator';
 import { MatDialog } from '@angular/material/dialog';
 import { MatSort } from '@angular/material/sort';
 import { Router } from '@angular/router';
-
-import { SubSink } from 'subsink';
-import { Observable, tap } from 'rxjs';
 
 import { Budget, BudgetRecord } from '@app/model/finance/planning/budgets';
 
@@ -14,21 +11,35 @@ import { ShareBudgetModalComponent } from '../share-budget-modal/share-budget-mo
 import { CreateBudgetModalComponent } from '../create-budget-modal/create-budget-modal.component';
 import { ChildBudgetsModalComponent } from '../../modals/child-budgets-modal/child-budgets-modal.component';
 
+interface BudgetsData {
+  overview: BudgetRecord[];
+  budgets: any[];
+}
+
 @Component({
   selector: 'app-budget-table',
   templateUrl: './budget-table.component.html',
   styleUrls: ['./budget-table.component.scss'],
+  standalone: false,
+  changeDetection: ChangeDetectionStrategy.OnPush, // Zoneless-ready with OnPush
 })
-
-export class BudgetTableComponent {
-
-  private _sbS = new SubSink();
-
-  @Input() budgets$: Observable<{overview: BudgetRecord[], budgets: any[]}>;
+export class BudgetTableComponent implements AfterViewInit, OnChanges {
+  // Signal-based inputs - using regular @Input() but converting to signals internally
+  @Input() budgets: BudgetsData | null = null;
   @Input() canPromote = false;
 
   @Output() doPromote: EventEmitter<void> = new EventEmitter();
 
+  // Injected dependencies using inject()
+  private _router = inject(Router);
+  private _dialog = inject(MatDialog);
+  private _cdr = inject(ChangeDetectorRef);
+
+  // Signal-based internal state
+  private _budgetsSignal = signal<BudgetsData | null>(null);
+  private _canPromoteSignal = signal<boolean>(false);
+
+  // Data source as a regular property (not signal) for MatTable compatibility
   dataSource = new MatTableDataSource();
 
   displayedColumns: string[] = ['name', 'status', 'startYear', 'duration', 'actions'];
@@ -36,25 +47,47 @@ export class BudgetTableComponent {
   @ViewChild(MatPaginator) paginator: MatPaginator;
   @ViewChild('sort', { static: true }) sort: MatSort;
 
-  overviewBudgets: BudgetRecord[] = [];
+  // Signal for overview budgets
+  overviewBudgets = signal<BudgetRecord[]>([]);
 
-  constructor(private _router$$: Router,
-              private _dialog: MatDialog,
-  ) { }
+  constructor() {
+    // Effect to reactively update data source when budgets signal changes
+    effect(() => {
+      const budgetsData = this._budgetsSignal();
+      if (budgetsData) {
+        this.overviewBudgets.set(budgetsData.overview);
+        this.dataSource.data = budgetsData.budgets;
 
-  ngOnInit(): void {
-    this._sbS.sink = this.budgets$.pipe(tap((o) => {
-      this.overviewBudgets = o.overview;
-      this.dataSource.data = o.budgets;
-    })).subscribe();
+        // Update paginator and sort if already initialized
+        if (this.paginator) {
+          this.dataSource.paginator = this.paginator;
+        }
+        if (this.sort) {
+          this.dataSource.sort = this.sort;
+        }
+        
+        // Mark for check in OnPush mode
+        this._cdr.markForCheck();
+      }
+    });
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    // Convert @Input() changes to signals
+    if (changes['budgets']) {
+      this._budgetsSignal.set(changes['budgets'].currentValue);
+    }
+    if (changes['canPromote']) {
+      this._canPromoteSignal.set(changes['canPromote'].currentValue);
+    }
   }
 
   /** 
- * Checks whether the user has access to a certain feature.
- * 
- * @TODO @IanOdhiambo9 - Please put proper access control architecture in place. 
- */
-  access(requested:any) 
+   * Checks whether the user has access to a certain feature.
+   * 
+   * @TODO @IanOdhiambo9 - Please put proper access control architecture in place. 
+   */
+  access(requested: any) 
   {  
     switch (requested) {
       case 'view':
@@ -81,8 +114,9 @@ export class BudgetTableComponent {
   }
 
   promote() {
-    if (this.canPromote)
+    if (this._canPromoteSignal()) {
       this.doPromote.emit();
+    }
   }
 
   /** Open share screen to configure budget access. */
@@ -106,7 +140,8 @@ export class BudgetTableComponent {
 
   openChildBudgetDialog(parent : Budget): void 
   { 
-    let children: any = this.overviewBudgets.find((budget) => budget.budget.id === parent.id)!?.children;
+    const overview = this.overviewBudgets();
+    let children: any = overview.find((budget) => budget.budget.id === parent.id)!?.children;
     children = children?.map((child) => child.budget)
     this._dialog.open(ChildBudgetsModalComponent, {
       height: 'fit-content',
@@ -116,11 +151,11 @@ export class BudgetTableComponent {
   }
 
   goToDetail(budgetId: string, action: string) {
-    this._router$$.navigate(['budgets', budgetId, action]).then(() => this._dialog.closeAll());
+    this._router.navigate(['budgets', budgetId, action]).then(() => this._dialog.closeAll());
   }
 
   deleteBudget(budget: Budget) {
-
+    // Delete functionality
   }
 
   translateStatus(status: number) {

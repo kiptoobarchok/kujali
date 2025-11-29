@@ -12,13 +12,13 @@
       </kujali-finance-search-header-card>
     </kujali-finance-toolbar>
 
-    <div *ngIf="showFilter" class="filter-section">
+    <div *ngIf="showFilter()" class="filter-section">
       <!-- <kujali-invoices-filter (filterChanged)='fieldsFilter($event)'>
 			</kujali-invoices-filter> -->
     </div>
 
     <div class="table-container">
-      <app-budget-table [budgets$]="allBudgets$"></app-budget-table>
+      <app-budget-table [budgets]="allBudgets()"></app-budget-table>
     </div>
   </div>
 </app-page>

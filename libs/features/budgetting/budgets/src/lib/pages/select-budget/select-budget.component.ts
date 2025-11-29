@@ -1,8 +1,8 @@
-import { Component, OnInit, ViewChild } from '@angular/core';
+import { ChangeDetectionStrategy, ChangeDetectorRef, Component, computed, inject, OnDestroy, OnInit, signal } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
+import { SubSink } from 'subsink';
 
 import { cloneDeep as ___cloneDeep, flatMap as __flatMap } from 'lodash';
-import { Observable, combineLatest, map, tap } from 'rxjs';
 
 import { Logger } from '@iote/bricks-angular';
 
@@ -12,43 +12,76 @@ import { BudgetsStore, OrgBudgetsStore } from '@app/state/finance/budgetting/bud
 
 import { CreateBudgetModalComponent } from '../../components/create-budget-modal/create-budget-modal.component';
 
+interface AllBudgetsData {
+  overview: BudgetRecord[];
+  budgets: any[];
+}
 
 @Component({
   selector: 'app-select-budget',
   templateUrl: './select-budget.component.html',
   styleUrls: ['./select-budget.component.scss', 
               '../../components/budget-view-styles.scss'],
+  standalone: false,
+  changeDetection: ChangeDetectionStrategy.OnPush, // Zoneless-ready with OnPush
 })
 /** List of all active budgets on the system. */
-export class SelectBudgetPageComponent implements OnInit
+export class SelectBudgetPageComponent implements OnInit, OnDestroy
 {
-  /** Overview which contains all budgets of an organisation */
-  overview$!: Observable<OrgBudgetsOverview>;
-  sharedBudgets$: Observable<any[]>;
+  private _sbS = new SubSink();
 
-  showFilter = false;
+  // Injected dependencies using inject()
+  private _orgBudgets$$ = inject(OrgBudgetsStore);
+  private _budgets$$ = inject(BudgetsStore);
+  private _dialog = inject(MatDialog);
+  private _logger = inject(Logger);
+  private _cdr = inject(ChangeDetectorRef);
 
-  // budgetsLoaded: boolean = false;
+  // Signal-based state
+  showFilter = signal(false);
 
-  allBudgets$: Observable<{overview: BudgetRecord[], budgets: any[]}>;
+  // Signals for observable data
+  overview = signal<OrgBudgetsOverview | null>(null);
+  sharedBudgets = signal<any[]>([]);
 
-  constructor(private _orgBudgets$$: OrgBudgetsStore,
-              private _budgets$$: BudgetsStore,
-              private _dialog: MatDialog,
-              private _logger: Logger) 
-  { }
+  // Computed signal that combines overview and budgets
+  allBudgets = computed<AllBudgetsData | null>(() => {
+    const overviewValue = this.overview();
+    const budgetsValue = this.sharedBudgets();
 
-  ngOnInit() {
-    this.overview$ = this._orgBudgets$$.get();
-    this.sharedBudgets$ = this._budgets$$.get();
+    if (!overviewValue || !budgetsValue) {
+      return null;
+    }
 
-    this.allBudgets$ = combineLatest([this.overview$, this._budgets$$.get()])
-                      .pipe(map(([overview, budgets]) => {return {overview: __flatMap(overview), budgets: __flatMap(budgets)}}),
-                            map((overview) => {
-                              const trBudgets = overview.budgets.map((budget: any) => {budget['endYear'] = budget.startYear + budget.duration - 1; return budget;})
-                              // this.budgetsLoaded = true;
-                              return {overview: overview.overview, budgets: trBudgets}
-                            }));
+    const flatOverview = __flatMap(overviewValue);
+    const flatBudgets = __flatMap(budgetsValue);
+    
+    const transformedBudgets = flatBudgets.map((budget: any) => {
+      budget['endYear'] = budget.startYear + budget.duration - 1;
+      return budget;
+    });
+
+    return {
+      overview: flatOverview,
+      budgets: transformedBudgets
+    };
+  });
+
+  ngOnInit(): void {
+    // Convert observables to signals using subscriptions
+    this._sbS.sink = this._orgBudgets$$.get().subscribe(overview => {
+      this.overview.set(overview);
+      this._cdr.markForCheck(); // Trigger change detection with OnPush
+    });
+
+    this._sbS.sink = this._budgets$$.get().subscribe(budgets => {
+      this.sharedBudgets.set(budgets);
+      this._cdr.markForCheck(); // Trigger change detection with OnPush
+    });
+  }
+
+  ngOnDestroy(): void {
+    this._sbS.unsubscribe();
   }
 
   applyFilter(event: Event) {
@@ -56,12 +89,12 @@ export class SelectBudgetPageComponent implements OnInit
     // this.dataSource.filter = filterValue.trim().toLowerCase();
   }
 
-  fieldsFilter(value: (Invoice) => boolean) {    
+  fieldsFilter(value: (any) => boolean) {    
     // this.filter$$.next(value);
   }
 
-  toogleFilter(value) {
-    // this.showFilter = value
+  toogleFilter(value: boolean) {
+    this.showFilter.set(value);
   }
 
   openDialog(parent : Budget | false): void 
